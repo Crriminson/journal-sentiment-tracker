@@ -2,6 +2,10 @@
 
 > A beautiful web application that analyzes the emotional sentiment of your daily journal entries and visualizes your mood patterns over time.
 
+**🔗 Live demo:** https://crriminson.github.io/journal-sentiment-tracker/
+
+The web app runs entirely in your browser. Sentiment is scored with the AFINN lexicon (via [`sentiment`](https://www.npmjs.com/package/sentiment), which also handles negations like "not happy"), and entries are saved in your browser's local storage, so nothing leaves your device. The original Flask + TextBlob API is kept in `backend/` for reference.
+
 ---
 
 ## ✨ Features
@@ -18,17 +22,29 @@
 
 | Frontend | Backend | Database | AI/ML |
 |----------|---------|----------|-------|
-| HTML/CSS/JS | Python Flask | SQLite | TextBlob NLP |
-| Chart.js | Flask-CORS | - | Sentiment Analysis |
+| HTML/CSS/JS | Browser-only (live demo) | localStorage | AFINN lexicon (`sentiment`) |
+| Chart.js | Python Flask (optional, `backend/`) | SQLite | TextBlob NLP |
 
 ---
 
 ## 🚀 Quick Start
 
-### 1️⃣ Clone & Setup
+Run the web app locally with any static server:
+
 ```bash
-git clone https://github.com/yourusername/sentiment-tracker.git
-cd sentiment-tracker/backend
+git clone https://github.com/Crriminson/journal-sentiment-tracker.git
+cd journal-sentiment-tracker/frontend
+python -m http.server 3000
+# Visit: http://localhost:3000
+```
+
+### Optional: original Flask API
+
+The steps below run the original Flask + TextBlob backend. The current frontend doesn't need it.
+
+### 1️⃣ Setup
+```bash
+cd journal-sentiment-tracker/backend
 ```
 
 ### 2️⃣ Install Dependencies
@@ -44,12 +60,6 @@ python -m textblob.download_corpora
 python app.py
 ```
 
-### 4️⃣ Open Frontend
-```bash
-cd ../frontend
-python -m http.server 3000
-# Visit: http://localhost:3000
-```
 
 ---
 

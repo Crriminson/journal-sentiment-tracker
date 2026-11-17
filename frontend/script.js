@@ -1,5 +1,7 @@
-// API Configuration
-const API_BASE_URL = 'http://localhost:5000';
+// Storage & sentiment configuration (runs fully in the browser)
+const STORAGE_KEY = 'journal-sentiment-entries';
+const SENTIMENT_LIB_URL = 'https://cdn.jsdelivr.net/npm/sentiment@5.0.2/+esm';
+let sentimentAnalyzer = null;
 
 // Global variables
 let entriesData = [];
@@ -34,22 +36,52 @@ function debugLog(message, data = null) {
     }
 }
 
-// Test API connection
+// Load the sentiment analyzer (AFINN lexicon with negation handling)
 async function testConnection() {
     try {
-        debugLog('Testing backend connection...');
-        const response = await fetch(`${API_BASE_URL}/api/health`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        const data = await response.json();
-        debugLog('✅ Backend connection successful', data);
+        debugLog('Loading sentiment analyzer...');
+        const { default: Sentiment } = await import(SENTIMENT_LIB_URL);
+        sentimentAnalyzer = new Sentiment();
+        debugLog('✅ Sentiment analyzer ready');
         return true;
     } catch (error) {
-        console.error('❌ Backend connection failed:', error);
-        showMessage('Cannot connect to server. Make sure the Flask backend is running on port 5000.', 'error');
+        console.error('❌ Sentiment analyzer failed to load:', error);
+        showMessage('Could not load the sentiment analyzer. Check your internet connection and reload.', 'error');
         return false;
     }
+}
+
+// Score text from -1 (very negative) to 1 (very positive)
+function analyzeSentiment(text) {
+    const result = sentimentAnalyzer.analyze(text);
+    const matched = result.calculation.length;
+    // Average AFINN value of the matched words (-5..5), scaled to -1..1
+    const polarity = matched ? Math.max(-1, Math.min(1, result.score / (matched * 5))) : 0;
+
+    let label = 'Neutral';
+    if (polarity > 0.1) label = 'Positive';
+    else if (polarity < -0.1) label = 'Negative';
+
+    return { polarity, label };
+}
+
+function readEntries() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
+function writeEntries(entries) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
 }
 
 // Wait for Chart.js to load
@@ -217,30 +249,18 @@ async function saveEntry(text, date) {
         showLoading(true);
         hideResult();
         
-        const requestData = { text, date };
-        debugLog('Sending request to backend', requestData);
-        
-        const response = await fetch(`${API_BASE_URL}/api/entries`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(requestData)
-        });
-        
-        debugLog('Backend response received', {
-            status: response.status,
-            ok: response.ok,
-            statusText: response.statusText
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Server error (${response.status}): ${errorText}`);
-        }
-        
-        const newEntry = await response.json();
+        const { polarity, label } = analyzeSentiment(text);
+        const entries = readEntries();
+        const newEntry = {
+            id: entries.reduce((max, e) => Math.max(max, e.id || 0), 0) + 1,
+            date,
+            text,
+            sentiment: Math.round(polarity * 1000) / 1000,
+            sentiment_label: label,
+            created_at: new Date().toISOString()
+        };
+        entries.push(newEntry);
+        writeEntries(entries);
         debugLog('✅ Entry saved successfully', newEntry);
         
         // Show success feedback
@@ -267,19 +287,8 @@ async function loadEntries() {
     debugLog('📖 Loading entries from API...');
     
     try {
-        const response = await fetch(`${API_BASE_URL}/api/entries`);
-        
-        debugLog('Entries API response', {
-            status: response.status,
-            ok: response.ok
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Failed to load entries: HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
-        entriesData = Array.isArray(data) ? data : [];
+        entriesData = readEntries().sort((a, b) =>
+            b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at));
         
         debugLog('✅ Entries loaded', {
             count: entriesData.length,
@@ -295,7 +304,7 @@ async function loadEntries() {
         
         // Update UI to show error state
         if (entriesList) {
-            entriesList.innerHTML = '<div class="no-entries">Unable to load entries. Please check if the server is running.</div>';
+            entriesList.innerHTML = '<div class="no-entries">Unable to load saved entries.</div>';
         }
         
         if (noDataMessage) {
@@ -311,18 +320,14 @@ async function loadStats() {
     debugLog('📊 Loading statistics from API...');
     
     try {
-        const response = await fetch(`${API_BASE_URL}/api/stats`);
-        
-        debugLog('Stats API response', {
-            status: response.status,
-            ok: response.ok
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Failed to load stats: HTTP ${response.status}`);
-        }
-        
-        const stats = await response.json();
+        const entries = readEntries();
+        const count = label => entries.filter(e => e.sentiment_label === label).length;
+        const stats = {
+            total_entries: entries.length,
+            positive_count: count('Positive'),
+            negative_count: count('Negative'),
+            neutral_count: count('Neutral')
+        };
         debugLog('✅ Stats loaded', stats);
         
         updateStats(stats);
@@ -375,12 +380,12 @@ function displayRecentEntries() {
         return `
             <div class="entry-item">
                 <div class="entry-header">
-                    <span class="entry-date">${date}</span>
-                    <span class="entry-sentiment ${sentimentClass}">
-                        ${entry.sentiment_label} (${entry.sentiment.toFixed(2)})
+                    <span class="entry-date">${escapeHtml(date)}</span>
+                    <span class="entry-sentiment ${escapeHtml(sentimentClass)}">
+                        ${escapeHtml(entry.sentiment_label)} (${entry.sentiment.toFixed(2)})
                     </span>
                 </div>
-                <div class="entry-text">${truncatedText}</div>
+                <div class="entry-text">${escapeHtml(truncatedText)}</div>
             </div>
         `;
     }).join('');
